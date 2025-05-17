@@ -1,4 +1,5 @@
-use std::{ cell::RefCell, fmt::Display, ops::{Add, Deref, Div, Mul, Neg, Sub}, sync::Arc};
+use std::{ cell::RefCell, fmt::Display, ops::{Add, Div, Mul, Neg, Sub}, sync::Arc, vec};
+use rand;
 struct MultiDimIterator {
     current: Vec<usize>,
     bounds: Vec<usize>,
@@ -87,18 +88,38 @@ macro_rules! s {
     };
 }
 
+
+enum Op{
+    Add(Arc<RefCell<TensorRaw>> , Arc<RefCell<TensorRaw>>),
+    Sub(Arc<RefCell<TensorRaw>> , Arc<RefCell<TensorRaw>>),
+    Mul(Arc<RefCell<TensorRaw>> , Arc<RefCell<TensorRaw>>),
+    Div(Arc<RefCell<TensorRaw>> , Arc<RefCell<TensorRaw>>),
+    MatMul(Arc<RefCell<TensorRaw>> , Arc<RefCell<TensorRaw>>),
+    Exp(Arc<RefCell<TensorRaw>>),
+    Neg(Arc<RefCell<TensorRaw>>),
+    Sum(Arc<RefCell<TensorRaw>> , usize),
+    Reshape(Arc<RefCell<TensorRaw>> ),
+    Transpose(Arc<RefCell<TensorRaw>>),
+    Assign(Arc<RefCell<TensorRaw>> , Arc<RefCell<TensorRaw>>),
+    Slice(Arc<RefCell<TensorRaw>> , SliceIndex),
+}
 pub struct TensorRaw{
     raw : Arc<RefCell<Vec<f64>>>,
     shape : Vec<usize>,
     strides : Vec<usize>,
     offset : usize,
+    op : Option<Op>,
+    grad : Option<Vec<f64>>
 }
 
 
 impl TensorRaw{
     pub fn new( data : & Vec<f64>)-> TensorRaw{
         TensorRaw { raw: Arc::new(RefCell::new(data.clone())),
-             shape: vec![data.len()], strides: vec![1], offset: 0 }
+             shape: vec![data.len()], strides: vec![1], offset: 0 ,
+             op : None,
+                grad : None
+            }
     }
     pub fn shape(self : & Self)-> Vec<usize>{
         self.shape.clone()
@@ -124,7 +145,9 @@ impl TensorRaw{
                     }
                 }
             },
-            offset : 0
+            offset : 0,
+             op : None,
+                grad : None
         }
     }
         pub fn arange(start: f64, end: f64, step: f64) -> TensorRaw {
@@ -148,6 +171,8 @@ impl TensorRaw{
             shape,
             strides: vec![1],
             offset: 0,
+             op : None,
+                grad : None
         }
     }
     pub fn zeros(shape : & Vec<usize>) -> TensorRaw{
@@ -171,7 +196,9 @@ impl TensorRaw{
                     }
                 }
             },
-            offset : 0
+            offset : 0,
+             op : None,
+                grad : None
         }
     }
     fn pick(raw : & [f64],shape : & [usize],strides : & [usize], result : & mut Vec<f64>){
@@ -192,9 +219,13 @@ impl TensorRaw{
     }
     pub fn transpose(self : & Self)-> TensorRaw{
         let mut newraw = Vec::new();
-        Self::pick(&self.raw.borrow()[self.offset..], &self.shape, &self.strides, & mut newraw);
         let mut newshape = self.shape.clone();
         newshape.reverse();
+        for i in MultiDimIterator::new(&newshape){
+            let mut newi = i.clone();
+            newi.reverse();
+            newraw.push(self.fetch(&newi));
+        }
         TensorRaw{
             raw : Arc::new(RefCell::new(newraw)),
             shape : newshape.clone(),
@@ -215,7 +246,9 @@ impl TensorRaw{
                     }
                 }
             },
-            offset : 0
+            offset : 0,
+            op : None,
+            grad : None
         }
     }
     pub fn reshape(self : & Self , shape : & Vec<usize>) -> TensorRaw{
@@ -253,7 +286,9 @@ impl TensorRaw{
             raw : self.raw.clone(),
             shape : self.shape.clone(),
             strides : self.strides.clone(),
-            offset:self.offset
+            offset:self.offset,
+            op : None,
+            grad : None
         }
     }
 
@@ -336,7 +371,10 @@ impl TensorRaw{
                                 }
                             }
                             noffset
-                        }
+                        },
+                    op : None,
+                    grad : None
+
                         
                     }
                 }
@@ -367,6 +405,9 @@ impl TensorRaw{
             shape: self.shape.clone(),
             strides: self.strides.clone(),
             offset: self.offset,
+            op : None,
+            grad : None
+
         }
     }
 }
@@ -395,7 +436,9 @@ impl Clone for TensorRaw {
                     }
                 }
             },
-            offset : 0
+            offset : 0,
+            op : None,
+            grad : None
         }
     }
 }
@@ -447,7 +490,9 @@ impl Display for TensorRaw{
                         raw: self.raw.clone(),
                         shape: self.shape[1..].to_vec(),
                         strides: self.strides[1..].to_vec(),
-                        offset : self.offset+i*self.strides[0]
+                        offset : self.offset+i*self.strides[0],
+                        op : None,
+                        grad : None
                     };
                     
                     // 递归格式化子张量
@@ -476,6 +521,8 @@ impl Neg for &TensorRaw {
             shape: self.shape.clone(),
             strides: self.strides.clone(),
             offset: self.offset,
+            op : None,
+            grad : None
         }
     }
 }
@@ -526,6 +573,8 @@ impl Add for &TensorRaw {
                 }
             },
             offset: 0,
+            op : None,
+            grad : None
         }
     }
 }
@@ -560,6 +609,8 @@ impl Div for &TensorRaw {
                 }
             },
             offset: 0,
+            op : None,
+            grad : None
         }
     }
 }
@@ -596,6 +647,8 @@ impl Sub for &TensorRaw {
                 }
             },
             offset: 0,
+            op : None,
+            grad : None
         }
     }
 }
@@ -631,6 +684,8 @@ impl Mul for &TensorRaw {
                 }
             },
             offset: 0,
+            op : None,
+            grad : None
         }
     }
 }
@@ -642,6 +697,8 @@ impl From<f64> for TensorRaw {
             shape: vec![],
             strides: vec![],
             offset: 0,
+            op : None,
+            grad : None
         }
     }
 }
@@ -663,7 +720,7 @@ impl TensorRaw {
                         aidx.extend(vec![i , k]);
                         let mut bidx = idx.clone();
                         bidx.extend(vec![k , j]);
-                        val += self.fetch(&aidx) * self.fetch(&bidx);
+                        val += self.fetch(&aidx) * rhs.fetch(&bidx);
                     }
                     out_raw.push(val);
                 }
@@ -689,7 +746,10 @@ impl TensorRaw {
                     }
                 }
             }
-            , offset: 0 }
+            , offset: 0 ,
+            op : None,
+            grad : None
+        }
     }
 }
 impl TensorRaw {
@@ -703,6 +763,8 @@ impl TensorRaw {
             shape: vec![n, n],
             strides: vec![n, 1],
             offset: 0,
+            op : None,
+            grad : None
         }
     }
 }
@@ -744,29 +806,378 @@ impl TensorRaw{
 
             },
             offset: 0,
+            op : None,
+            grad : None
         }
 
 
     }
 }
 impl TensorRaw{
-    fn assign(self : & mut Self , rhs : & TensorRaw){
+    pub fn assign(self : & mut Self , rhs : & TensorRaw){
         assert_eq!(self.shape , self.shape);
         for i in MultiDimIterator::new(&self.shape){
             self.set(&i , rhs.fetch(&i));
         }
     }
+    pub fn rand(shape : & Vec<usize>)-> TensorRaw{
+        let mut data = Vec::new();
+        for _ in 0..shape.iter().product::<usize>(){
+            data.push(rand::random::<f64>());
+        }
+        TensorRaw{
+            raw : Arc::new(RefCell::new(data)),
+            shape : shape.clone(),
+            strides : {
+                match shape.len(){
+                    0 => vec![],
+                    _ => {
+                        let mut strides = vec![1];
+                        let mut prod = 1;
+                        let mut rev_out_shape = shape.clone();
+                        rev_out_shape.reverse();
+                        for i in &rev_out_shape[0..(shape.len()-1)]  {
+                            prod *= i;
+                            strides.push(prod);
+                        }
+                        strides.reverse();
+                        strides
+                    }
+                }
+            },
+            offset : 0,
+             op : None,
+                grad : None
+        }
+    }
+    pub fn randbetween(shape : & Vec<usize> , start : f64 , end : f64)-> TensorRaw{
+        let mut data = Vec::new();
+        for _ in 0..shape.iter().product::<usize>(){
+            data.push(rand::random::<f64>() * (end - start) + start);
+        }
+        TensorRaw{
+            raw : Arc::new(RefCell::new(data)),
+            shape : shape.clone(),
+            strides : {
+                match shape.len(){
+                    0 => vec![],
+                    _ => {
+                        let mut strides = vec![1];
+                        let mut prod = 1;
+                        let mut rev_out_shape = shape.clone();
+                        rev_out_shape.reverse();
+                        for i in &rev_out_shape[0..(shape.len()-1)]  {
+                            prod *= i;
+                            strides.push(prod);
+                        }
+                        strides.reverse();
+                        strides
+                    }
+                }
+            },
+            offset : 0,
+             op : None,
+                grad : None
+        }
+    }
 }
 
+struct Tensor(Arc<RefCell<TensorRaw>>);
+
+//impl all the functions from tensorraw for tensor
+impl Clone for Tensor {
+    fn clone(&self) -> Self {
+        let res = Tensor(Arc::new(RefCell::new(self.0.borrow().clone())));
+        res.0.borrow_mut().op = None;// Clear the operation history
+        res.0.borrow_mut().grad = None;
+        res
+    }
+}
+impl Display for Tensor{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.borrow())
+    }
+}
+impl Add for &Tensor {
+    type Output = Tensor;
+    fn add(self, rhs: Self) -> Self::Output {
+        let res = Tensor(Arc::new(RefCell::new((&*self.0.borrow() + &*rhs.0.borrow()).clone())));
+        res.0.borrow_mut().op = Some(Op::Add(self.0.clone(), rhs.0.clone()));
+        res
+    }
+}
+impl Sub for &Tensor {
+    type Output = Tensor;
+    fn sub(self, rhs: Self) -> Self::Output {
+        let res = Tensor(Arc::new(RefCell::new((&*self.0.borrow() - &*rhs.0.borrow()).clone())));
+        res.0.borrow_mut().op = Some(Op::Sub(self.0.clone(), rhs.0.clone()));
+        res
+    }
+}
+impl Mul for &Tensor {
+    type Output = Tensor;
+    fn mul(self, rhs: Self) -> Self::Output {
+        let res = Tensor(Arc::new(RefCell::new((&*self.0.borrow() * &*rhs.0.borrow()).clone())));
+        res.0.borrow_mut().op = Some(Op::Mul(self.0.clone(), rhs.0.clone()));
+        res
+    }
+}
+impl Div for &Tensor {
+    type Output = Tensor;
+    fn div(self, rhs: Self) -> Self::Output {
+        let res = Tensor(Arc::new(RefCell::new((&*self.0.borrow() / &*rhs.0.borrow()).clone())));
+        res.0.borrow_mut().op = Some(Op::Div(self.0.clone(), rhs.0.clone()));
+        res
+    }
+}
+
+impl Neg for &Tensor {
+    type Output = Tensor;
+    fn neg(self) -> Self::Output {
+        let res = Tensor(Arc::new(RefCell::new((-&*self.0.borrow()).clone())));
+        res.0.borrow_mut().op = Some(Op::Neg(self.0.clone()));
+        res
+    }
+}
+
+impl Tensor{
+    pub fn new(data : & Vec<f64>)-> Tensor{
+        Tensor(Arc::new(RefCell::new(TensorRaw::new(data))))
+    }
+    pub fn shape(self : & Self)-> Vec<usize>{
+        self.0.borrow().shape()
+    }
+    pub fn raw(self : & Self)-> f64{
+        self.0.borrow().raw()
+    }
+    pub fn fetch(self : & Self , index : & Vec<usize>) -> f64{
+        self.0.borrow().fetch(index)
+    }
+}
+impl Tensor {
+    pub fn matmul(self : & Self , rhs : & Tensor) -> Tensor{
+        let res = Tensor(Arc::new(RefCell::new((self.0.borrow().matmul(&rhs.0.borrow())).clone())));
+        res.0.borrow_mut().op = Some(Op::MatMul(self.0.clone(), rhs.0.clone()));
+        res
+    }
+}
+impl Tensor {
+    pub fn exp(self : & Self) -> Tensor{
+        let res = Tensor(Arc::new(RefCell::new((self.0.borrow().exp()).clone())));
+        res.0.borrow_mut().op = Some(Op::Exp(self.0.clone()));
+        res
+    }
+}
+impl Tensor {
+    pub fn iden(n: usize) -> Tensor {
+        let res = Tensor(Arc::new(RefCell::new(TensorRaw::iden(n))));
+        res
+    }
+}
+impl Tensor {
+    pub fn sum(self : & Self , axis : usize) -> Tensor{
+        let res = Tensor(Arc::new(RefCell::new((self.0.borrow().sum(axis)).clone())));
+        res.0.borrow_mut().op = Some(Op::Sum(self.0.clone(), axis));
+        res
+    }
+}
+impl Tensor {
+    pub fn reshape(self : & mut Self , shape : & Vec<usize>) -> Tensor{
+        let res = Tensor(Arc::new(RefCell::new((self.0.borrow().reshape(shape)).clone())));
+        res.0.borrow_mut().op = Some(Op::Reshape(self.0.clone()));
+        res
+    }
+}
+impl Tensor {
+    pub fn transpose(self : & mut Self) -> Tensor{
+        let res = Tensor(Arc::new(RefCell::new((self.0.borrow().transpose()).clone())));
+        res.0.borrow_mut().op = Some(Op::Transpose(self.0.clone()));
+        res
+    }
+}
+impl Tensor {
+    pub fn assign(self : & mut Self , rhs : & Tensor) {
+        self.0.borrow_mut().assign(&rhs.0.borrow());
+        self.0.borrow_mut().op = Some(Op::Assign(self.0.clone(), rhs.0.clone()));
+    }
+}
+impl Tensor{
+    pub fn get(self : & mut Self , index : SliceIndex) -> Tensor{
+        let res = Tensor(Arc::new(RefCell::new(self.0.borrow().get(index.clone()))));
+        res.0.borrow_mut().op = Some(Op::Slice(self.0.clone(), index));
+        res
+    }
+    fn set(self : & mut Self , index : & Vec<usize> , value : f64){
+        self.0.borrow_mut().set(index , value);
+    }
+    pub fn views(self : & mut Self)-> Tensor{
+        let res = Tensor(Arc::new(RefCell::new((self.0.borrow().views()).clone())));
+        res.0.borrow_mut().op = Some(Op::Slice(self.0.clone(), vec![]));
+        res
+    }
+    pub fn arange(start: f64, end: f64, step: f64) -> Tensor {
+        let res = Tensor(Arc::new(RefCell::new(TensorRaw::arange(start, end, step))));
+        res
+    }
+    pub fn zeros(shape : & Vec<usize>) -> Tensor{
+        let res = Tensor(Arc::new(RefCell::new(TensorRaw::zeros(shape))));
+        res
+    }
+    pub fn rand(shape : & Vec<usize>)-> Tensor{
+        let res = Tensor(Arc::new(RefCell::new(TensorRaw::rand(shape))));
+        res
+    }
+    pub fn randbetween(shape : & Vec<usize> , start : f64 , end : f64)-> Tensor{
+        let res = Tensor(Arc::new(RefCell::new(TensorRaw::randbetween(shape , start , end))));
+        res
+    }
+}
+
+impl Tensor{
+    pub fn init_grad(self : & mut Self){
+        // clear all the childrens of op using recursion
+        match &self.0.borrow().op{
+            None => (),
+            Some(Op :: Assign( a , b))=>{
+                a.borrow_mut().grad = Some(vec![0.;a.borrow().shape.iter().product()]);
+                b.borrow_mut().grad = Some(vec![0.;b.borrow().shape.iter().product()]);
+            }
+            Some(Op :: Add( a , b))=>{ a.borrow_mut().grad = Some(vec![0.;a.borrow().shape.iter().product()]);
+                b.borrow_mut().grad = Some(vec![0.;b.borrow().shape.iter().product()]);
+            }
+            Some(Op :: Sub( a , b))=>{
+                a.borrow_mut().grad = Some(vec![0.;a.borrow().shape.iter().product()]);
+                b.borrow_mut().grad = Some(vec![0.;b.borrow().shape.iter().product()]);
+            }
+            Some(Op :: Mul( a , b))=>{
+                a.borrow_mut().grad = Some(vec![0.;a.borrow().shape.iter().product()]);
+                b.borrow_mut().grad = Some(vec![0.;b.borrow().shape.iter().product()]);
+            }
+            Some(Op :: Div( a , b))=>{
+                a.borrow_mut().grad = Some(vec![0.;a.borrow().shape.iter().product()]);
+                b.borrow_mut().grad = Some(vec![0.;b.borrow().shape.iter().product()]);
+            }
+            Some(Op :: Neg( a ))=>{
+                a.borrow_mut().grad = Some(vec![0.;a.borrow().shape.iter().product()]);
+            }
+            Some(Op :: MatMul( a , b))=>{
+                a.borrow_mut().grad = Some(vec![0.;a.borrow().shape.iter().product()]);
+                b.borrow_mut().grad = Some(vec![0.;b.borrow().shape.iter().product()]);
+            }
+            Some(Op :: Exp( a ))=>{
+                a.borrow_mut().grad = Some(vec![0.;a.borrow().shape.iter().product()]);
+            }
+            Some(Op :: Sum( a , _))=>{
+                a.borrow_mut().grad = Some(vec![0.;a.borrow().shape.iter().product()]);
+            }
+            Some(Op :: Reshape( a ))=>{
+                a.borrow_mut().grad = Some(vec![0.;a.borrow().shape.iter().product()]);
+            }
+            Some(Op :: Transpose( a ))=>{
+                a.borrow_mut().grad = Some(vec![0.;a.borrow().shape.iter().product()]);
+            }
+            Some(Op :: Slice(a , index)) => {
+                if(a.borrow().op.is_none()){
+                    a.borrow_mut().grad = Some(vec![0.;a.borrow().shape.iter().product()]);
+                }
+                else{
+                    //only clear the portion of the tensor that is used in the slice
+                    let shape = a.borrow().shape.clone();
+                    let strides = {
+                        match shape.len(){
+                        0 => vec![],
+                        _ => {
+                            let mut strides = vec![1];
+                            let mut prod = 1;
+                            let mut rev_out_shape = shape.clone();
+                            rev_out_shape.reverse();
+                            for i in &rev_out_shape[0..(shape.len()-1)]  {
+                                prod *= i;
+                                strides.push(prod);
+                            }
+                            strides.reverse();
+                            strides
+                        }
+                        }
+                    };
+                    let nstrides = {
+                        let mut rstrides = Vec :: new();
+                        let restdim = shape.len() - index.len();
+                        for i in (shape.len()-restdim..shape.len()).rev(){
+                            rstrides.push(strides[i]);
+                        }
+                        for i in (0..index.len()).rev(){
+                            match index[i]{
+                                SliceIndexUnit::Filler => (),
+                                SliceIndexUnit::Num(_) => (),
+                                SliceIndexUnit::Slice((_ , _ , step))=>{
+                                    rstrides.push(strides[i] * step);
+                                }
+                            }
+                        }
+                        rstrides.reverse();
+                        rstrides
+                    };
+                    let noffset = {
+                        let mut noffset = 0;
+                        for i in 0..index.len(){
+                            match index[i]{
+                                SliceIndexUnit::Filler => (),
+                                SliceIndexUnit::Num(x) => {
+                                    noffset += x * strides[i];
+                                }
+                                SliceIndexUnit::Slice((start , _ ,_))=>{
+                                    noffset += start* strides[i];
+                                }
+                            }
+                        }
+                        noffset
+                    };
+                    let mut nshape = Vec :: new();
+                    for i in 0..index.len(){
+                        match index[i]{
+                            SliceIndexUnit::Filler => {},
+                            SliceIndexUnit::Num(_) => {},
+                            SliceIndexUnit::Slice((start , end , step))=>{
+                                assert_ne!(start , end);
+                                assert!(end <= shape[i]);
+                                let mut dim = 1 + (end - start) / step;
+                                if start + step * (dim-1) == end {
+                                    dim -= 1;
+                                }
+                                nshape.push(dim);
+                            }
+                        }
+                    }
+                    if index.len() < shape.len(){
+                        nshape.extend_from_slice(&shape[index.len()..]);
+                    }
+                    for i in MultiDimIterator::new(&nshape){
+                        let mut raw_index = noffset;
+                        for j in 0..nshape.len(){
+                            raw_index += (i[nshape.len() - j-1] % nshape[nshape.len()-j - 1]) * nstrides[nshape.len() - j -1];
+                        }
+                        a.borrow_mut().grad.as_mut().unwrap()[raw_index] = 0.;
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+
+
 fn main(){
-    let a = TensorRaw::arange(0., 10., 1.);
-    let b = TensorRaw::arange(0., 12., 1.).reshape(&vec![12 , 1]);
+    let a = Tensor::arange(0., 10., 1.);
+    let b = Tensor::arange(0., 12., 1.).reshape(&vec![12 , 1]);
     println!("{}" , a.fetch(&vec![10 , 0]));
     println!("{}" , b.fetch(&vec![10 , 0]));
     let mut c = &a * &b;
     let d = c.exp();
     println!("{}" , c.fetch(&vec![10 , 0]));
     println!("{}", c);
-    c.get(s![(0 ,2) , (0 , 5)]).assign(&TensorRaw::arange(0., 10., 1.).reshape(&vec![2 , 5]));
-    println!("{}" , c);
+    c.get(s![(0 ,2) , (0 , 5)]).assign(&Tensor::rand(&vec![2 , 5]));
+    println!("{}" , c.get(s![]));
+    println!("{}" , c.get(s![(0 , 10) , (0 , 10)]).transpose().matmul(&Tensor::iden(10)));
 }
