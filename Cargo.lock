@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "AutoTensor"
+version = "0.1.0"
+dependencies = [
+ "rand",
+ "rand_distr",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -30,14 +38,6 @@ dependencies = [
  "libc",
  "r-efi",
  "wasi",
-]
-
-[[package]]
-name = "hello"
-version = "0.1.0"
-dependencies = [
- "rand",
- "rand_distr",
 ]
 
 [[package]]
