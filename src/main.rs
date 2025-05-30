@@ -1,17 +1,17 @@
 pub mod tensor;
 pub mod nn;
+use std::vec;
+
 use tensor::Tensor;
-use nn::*;
 fn main(){
-    let input = Tensor::ones(&vec![2, 3]);
-    let linear = Linear::new(3, 1);
-    let mut output = linear.forward(&input).reshape(&vec![2]);
-    println!("input: {}", input);
-    println!("weight: {}", linear.weight);
-    println!("bias: {}", linear.bias);
-    println!("output: {}", output);
-    output.init_grad();
-    output.set_grad(&Tensor::ones(&vec![2]));
-    output.back_prop();
-    input.print_grad();
+    let mut a = Tensor::randn(&vec![3,3]); // initialize a 3x3 matrix from normal distribution
+    let mut b = Tensor::randn(&vec![3,3]); // initialize a 3x3 matrix from normal distribution
+    let mut c = &a * &b;
+    println!("a = {}",a);
+    println!("b = {}",b);
+    c.init_grad(); // initialize all the Tensors in upstream
+    c.set_grad(&Tensor::ones(&vec![3,3])); // initialize itself
+    c.back_prop(); // propagation
+    a.print_grad();
+    b.print_grad();
 }

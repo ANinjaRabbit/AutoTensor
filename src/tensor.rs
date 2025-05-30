@@ -55,7 +55,7 @@ pub enum SliceIndexUnit{
     Filler
 }
 #[derive(Debug,Clone)]
-struct SliceIndex(Vec<SliceIndexUnit>);
+pub struct SliceIndex(Vec<SliceIndexUnit>);
 
 impl Default for SliceIndex {
     fn default() -> Self {
@@ -130,8 +130,8 @@ macro_rules! s {
 }
 
 
-#[derive(Debug)]
-enum Op{
+#[derive(Debug,Clone)]
+pub enum Op{
     Add(Arc<RefCell<TensorRaw>> , Arc<RefCell<TensorRaw>>),
     Sub(Arc<RefCell<TensorRaw>> , Arc<RefCell<TensorRaw>>),
     Mul(Arc<RefCell<TensorRaw>> , Arc<RefCell<TensorRaw>>),
@@ -143,7 +143,8 @@ enum Op{
     Reshape(Arc<RefCell<TensorRaw>> ),
     Transpose(Arc<RefCell<TensorRaw>> , Vec<usize>),
     Assign(Arc<RefCell<TensorRaw>>),
-    Slice(Arc<RefCell<TensorRaw>> , SliceIndex),
+    SliceFrom(Arc<RefCell<TensorRaw>> , SliceIndex),
+    SliceInto(Vec<Arc<RefCell<TensorRaw>>> , Vec<SliceIndex>),
     Dot(Arc<RefCell<TensorRaw>> , Arc<RefCell<TensorRaw>>),
 }
 #[derive(Debug)]
@@ -497,10 +498,9 @@ impl Display for TensorRaw{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let data = &self.raw.borrow()[self.offset..];
         match self.shape.len(){
-            0 => write!(f, "{:.4}" , data[0]), // 零维张量
+            0 => write!(f, "{:.4}" , data[0]),
 
             1 => {
-                // 一维张量
                 write!(f, "[")?;
                 for i in  0..self.shape[0] {
                     if i > 0 {
@@ -512,7 +512,6 @@ impl Display for TensorRaw{
             },
 
             2 => {
-                // 二维张量(矩阵)
                 write!(f, "[")?;
                 for i in 0..self.shape[0]{
                     write!(f,"[ ")?;
@@ -531,7 +530,6 @@ impl Display for TensorRaw{
             }
             
             _ => {
-                // 多维张量(递归处理)
                 let dim = self.shape[0];
 
                 write!(f, "[")?;
@@ -545,7 +543,6 @@ impl Display for TensorRaw{
                         grad : None
                     };
                     
-                    // 递归格式化子张量
                     write!(f, "{}", sub_tensor)?;
                     if i != dim-1{
                         write!(f,",\n")?;
@@ -1239,7 +1236,23 @@ impl Tensor{
     pub fn get<T:Into<SliceIndex>>(self : &Self , indexs : T) -> Tensor{
         let index = indexs.into();
         let res = Tensor(Arc::new(RefCell::new(self.0.borrow().get(index.clone()))));
-        res.0.borrow_mut().op = Some(Op::Slice(self.0.clone(), index));
+        res.0.borrow_mut().op = Some(Op::SliceFrom(self.0.clone(), index.clone()));
+        let op = self.0.borrow().op.clone();
+        match &op{
+            None => self.0.borrow_mut().op = Some(Op::SliceInto(vec![res.0.clone()], vec![index])),
+            Some(Op::SliceFrom(_, _)) => {
+                self.0.borrow_mut().op = Some(Op::SliceInto(vec![res.0.clone()], vec![index]));
+            },
+            Some(Op::SliceInto(oldt,oldi))=>{
+                let mut newt = oldt.clone();
+                newt.push(res.0.clone());
+                let mut newi = oldi.clone();
+                newi.push(index);
+                self.0.borrow_mut().op = Some(Op::SliceInto(newt, newi));
+            }
+            _ => {
+            }
+        }
         res
     }
     fn set(self : & mut Self , index : & Vec<usize> , value : f64){
@@ -1247,7 +1260,7 @@ impl Tensor{
     }
     pub fn views(self : & mut Self)-> Tensor{
         let res = Tensor(Arc::new(RefCell::new((self.0.borrow().views()).clone())));
-        res.0.borrow_mut().op = Some(Op::Slice(self.0.clone(), SliceIndex::default()));
+        res.0.borrow_mut().op = Some(Op::SliceFrom(self.0.clone(), SliceIndex::default()));
         res
     }
     pub fn arange(start: f64, end: f64, step: f64) -> Tensor {
@@ -1302,184 +1315,198 @@ impl From<Arc<RefCell<TensorRaw>>> for Tensor {
 
 impl Tensor{
     pub fn init_grad(self : & Self){
+        self.init_grad_helper(false, false);
+    }
+    pub fn init_grad_helper(self : & Self , is_slice_into : bool , is_slice_from : bool){
         // clear all the childrens of op using recursion
         let selfshape = self.0.borrow().shape.clone();
-        println!("init_grad: {:?}", selfshape);
         match &self.0.borrow().op{
             None => (),
             Some(Op :: Assign( a ))=>{
                 a.borrow_mut().grad = Some(vec![0.;selfshape.iter().product()]);
-                Tensor::from(a.clone()).init_grad();
+                Tensor::from(a.clone()).init_grad_helper(false, false);
             }
             Some(Op :: Add( a , b))=>{ 
                 a.borrow_mut().grad = Some(vec![0.;selfshape.iter().product()]);
                 b.borrow_mut().grad = Some(vec![0.;selfshape.iter().product()]);
-                Tensor::from(a.clone()).init_grad();
-                Tensor::from(b.clone()).init_grad();
+                Tensor::from(a.clone()).init_grad_helper(false, false);
+                Tensor::from(b.clone()).init_grad_helper(false, false);
 
             }
             Some(Op :: Sub( a , b))=>{ 
                 a.borrow_mut().grad = Some(vec![0.;selfshape.iter().product()]);
                 b.borrow_mut().grad = Some(vec![0.;selfshape.iter().product()]);
-                Tensor::from(a.clone()).init_grad();
-                Tensor::from(b.clone()).init_grad();
+                Tensor::from(a.clone()).init_grad_helper(false, false);
+                Tensor::from(b.clone()).init_grad_helper(false, false);
             }
             Some(Op :: Mul( a , b))=>{
                 a.borrow_mut().grad = Some(vec![0.;selfshape.iter().product()]);
                 b.borrow_mut().grad = Some(vec![0.;selfshape.iter().product()]);
-                Tensor::from(a.clone()).init_grad();
-                Tensor::from(b.clone()).init_grad();
+                Tensor::from(a.clone()).init_grad_helper(false, false);
+                Tensor::from(b.clone()).init_grad_helper(false, false);
             }
             Some(Op :: Div( a , b))=>{
                 a.borrow_mut().grad = Some(vec![0.;selfshape.iter().product()]);
                 b.borrow_mut().grad = Some(vec![0.;selfshape.iter().product()]);
-                Tensor::from(a.clone()).init_grad();
-                Tensor::from(b.clone()).init_grad();
+                Tensor::from(a.clone()).init_grad_helper(false, false);
+                Tensor::from(b.clone()).init_grad_helper(false, false);
             }
             Some(Op :: Neg( a ))=>{
                 a.borrow_mut().grad = Some(vec![0.;selfshape.iter().product()]);
-                Tensor::from(a.clone()).init_grad();
+                Tensor::from(a.clone()).init_grad_helper(false, false);
             }
             Some(Op :: MatMul( a , b))=>{
                 let alen: usize = a.borrow().shape.iter().product();
                 let blen: usize = b.borrow().shape.iter().product();
                 a.borrow_mut().grad = Some(vec![0.;alen]);
                 b.borrow_mut().grad = Some(vec![0.;blen]);
-                Tensor::from(a.clone()).init_grad();
-                Tensor::from(b.clone()).init_grad();
+                Tensor::from(a.clone()).init_grad_helper(false, false);
+                Tensor::from(b.clone()).init_grad_helper(false, false);
             }
             Some(Op :: Exp( a ))=>{
                 a.borrow_mut().grad = Some(vec![0.;selfshape.iter().product()]);
-                Tensor::from(a.clone()).init_grad();
+                Tensor::from(a.clone()).init_grad_helper(false, false);
             }
             Some(Op :: Sum( a , _))=>{
                 let alen: usize = a.borrow().shape.iter().product();
                 a.borrow_mut().grad = Some(vec![0.;alen]);
-                Tensor::from(a.clone()).init_grad();
+                Tensor::from(a.clone()).init_grad_helper(false, false);
             }
             Some(Op :: Reshape( a ))=>{
                 let alen: usize = a.borrow().shape.iter().product();
                 a.borrow_mut().grad = Some(vec![0.;alen]);
-                Tensor::from(a.clone()).init_grad();
+                Tensor::from(a.clone()).init_grad_helper(false, false);
             }
             Some(Op :: Transpose( a  , _))=>{
                 let alen: usize = a.borrow().shape.iter().product();
                 a.borrow_mut().grad = Some(vec![0.;alen]);
-                Tensor::from(a.clone()).init_grad();
+                Tensor::from(a.clone()).init_grad_helper(false, false);
             }
-            Some(Op :: Slice(a , indexs)) => {
-                let index = &indexs.0;
-                if(a.borrow().grad.is_none()){
-                    let alen: usize = a.borrow().shape.iter().product();
-                    a.borrow_mut().grad = Some(vec![0.;alen]);
-                }
-                else{
-                    //only clear the portion of the tensor that is used in the slice
-                    let shape = a.borrow().shape.clone();
-                    let strides = {
-                        match shape.len(){
-                        0 => vec![],
-                        _ => {
-                            let mut strides = vec![1];
-                            let mut prod = 1;
-                            let mut rev_out_shape: Vec<usize> = shape.clone();
-                            rev_out_shape.reverse();
-                            for i in &rev_out_shape[0..(shape.len()-1)]  {
-                                prod *= i;
-                                strides.push(prod);
+            Some(Op :: SliceFrom(a , indexs)) => {
+                if !is_slice_into{
+                    let index = &indexs.0;
+                    let is_none = a.borrow().grad.is_none();
+                    if is_none{
+                        let alen= a.borrow().shape.iter().product();
+                        a.borrow_mut().grad = Some(vec![0.;alen]);
+                    }
+                    else{
+                        //only clear the portion of the tensor that is used in the slice
+                        let shape = a.borrow().shape.clone();
+                        let strides = {
+                            match shape.len(){
+                            0 => vec![],
+                            _ => {
+                                let mut strides = vec![1];
+                                let mut prod = 1;
+                                let mut rev_out_shape: Vec<usize> = shape.clone();
+                                rev_out_shape.reverse();
+                                for i in &rev_out_shape[0..(shape.len()-1)]  {
+                                    prod *= i;
+                                    strides.push(prod);
+                                }
+                                strides.reverse();
+                                strides
                             }
-                            strides.reverse();
-                            strides
-                        }
-                        }
-                    };
-                    let nstrides = {
-                        let mut rstrides = Vec :: new();
-                        let restdim = shape.len() - index.len();
-                        for i in (shape.len()-restdim..shape.len()).rev(){
-                            rstrides.push(strides[i]);
-                        }
-                        for i in (0..index.len()).rev(){
-                            match index[i]{
-                                SliceIndexUnit::Filler => (),
-                                SliceIndexUnit::Num(_) => (),
-                                SliceIndexUnit::Slice((_ , _ , step))=>{
-                                    rstrides.push(strides[i] * step);
+                            }
+                        };
+                        let nstrides = {
+                            let mut rstrides = Vec :: new();
+                            let restdim = shape.len() - index.len();
+                            for i in (shape.len()-restdim..shape.len()).rev(){
+                                rstrides.push(strides[i]);
+                            }
+                            for i in (0..index.len()).rev(){
+                                match index[i]{
+                                    SliceIndexUnit::Filler => (),
+                                    SliceIndexUnit::Num(_) => (),
+                                    SliceIndexUnit::Slice((_ , _ , step))=>{
+                                        rstrides.push(strides[i] * step);
+                                    }
                                 }
                             }
-                        }
-                        rstrides.reverse();
-                        rstrides
-                    };
-                    let noffset = {
-                        let mut noffset = 0;
+                            rstrides.reverse();
+                            rstrides
+                        };
+                        let noffset = {
+                            let mut noffset = 0;
+                            for i in 0..index.len(){
+                                match index[i]{
+                                    SliceIndexUnit::Filler => (),
+                                    SliceIndexUnit::Num(x) => {
+                                        noffset += x * strides[i];
+                                    }
+                                    SliceIndexUnit::Slice((start , _ ,_))=>{
+                                        noffset += start* strides[i];
+                                    }
+                                }
+                            }
+                            noffset
+                        };
+                        let mut nshape = Vec :: new();
                         for i in 0..index.len(){
                             match index[i]{
-                                SliceIndexUnit::Filler => (),
-                                SliceIndexUnit::Num(x) => {
-                                    noffset += x * strides[i];
-                                }
-                                SliceIndexUnit::Slice((start , _ ,_))=>{
-                                    noffset += start* strides[i];
+                                SliceIndexUnit::Filler => {},
+                                SliceIndexUnit::Num(_) => {},
+                                SliceIndexUnit::Slice((start , end , step))=>{
+                                    assert_ne!(start , end);
+                                    assert!(end <= shape[i]);
+                                    let mut dim = 1 + (end - start) / step;
+                                    if start + step * (dim-1) == end {
+                                        dim -= 1;
+                                    }
+                                    nshape.push(dim);
                                 }
                             }
                         }
-                        noffset
-                    };
-                    let mut nshape = Vec :: new();
-                    for i in 0..index.len(){
-                        match index[i]{
-                            SliceIndexUnit::Filler => {},
-                            SliceIndexUnit::Num(_) => {},
-                            SliceIndexUnit::Slice((start , end , step))=>{
-                                assert_ne!(start , end);
-                                assert!(end <= shape[i]);
-                                let mut dim = 1 + (end - start) / step;
-                                if start + step * (dim-1) == end {
-                                    dim -= 1;
-                                }
-                                nshape.push(dim);
+                        if index.len() < shape.len(){
+                            nshape.extend_from_slice(&shape[index.len()..]);
+                        }
+                        for i in MultiDimIterator::new(&nshape){
+                            let mut raw_index = noffset;
+                            for j in 0..nshape.len(){
+                                raw_index += (i[nshape.len() - j-1] % nshape[nshape.len()-j - 1]) * nstrides[nshape.len() - j -1];
                             }
+                            a.borrow_mut().grad.as_mut().unwrap()[raw_index] = 0.;
                         }
                     }
-                    if index.len() < shape.len(){
-                        nshape.extend_from_slice(&shape[index.len()..]);
-                    }
-                    for i in MultiDimIterator::new(&nshape){
-                        let mut raw_index = noffset;
-                        for j in 0..nshape.len(){
-                            raw_index += (i[nshape.len() - j-1] % nshape[nshape.len()-j - 1]) * nstrides[nshape.len() - j -1];
-                        }
-                        a.borrow_mut().grad.as_mut().unwrap()[raw_index] = 0.;
-                    }
+                    Tensor::from(a.clone()).init_grad_helper(false, true);
                 }
-                Tensor::from(a.clone()).init_grad();
             },
             Some(Op::Dot( a, b)) => {
                 let ashape = a.borrow().shape.clone();
                 let bshape = b.borrow().shape.clone();
                 a.borrow_mut().grad = Some(vec![0.;ashape.iter().product()]);
                 b.borrow_mut().grad = Some(vec![0.;bshape.iter().product()]);
-                Tensor::from(a.clone()).init_grad();
-                Tensor::from(b.clone()).init_grad();
+                Tensor::from(a.clone()).init_grad_helper(false,false);
+                Tensor::from(b.clone()).init_grad_helper(false,false);
+            },
+            Some(Op::SliceInto(ts,is)) => {
+                if !is_slice_from{
+                    for i in 0..ts.len(){
+                        let ishape = ts[i].borrow().shape.clone();
+                        ts[i].borrow_mut().grad = Some(vec![0.;ishape.iter().product()]);
+                        Tensor::from(ts[i].clone()).init_grad_helper(true, false);
+                    }
+                }
             }
         }
     }
-    pub fn back_prop(self : & mut Self){
-        let selfshape= self.0.borrow().shape.clone();
+    pub fn back_prop_helper(self : & mut Self,is_slice_into : bool, is_slice_from : bool){
+        let selfshape= self.shape().clone();
         match &self.0.borrow().op{
             None => (),
             Some(Op::Add(a, b)) => {
                 a.borrow_mut().grad.as_mut().unwrap().iter_mut().zip(self.0.borrow().grad.as_ref().unwrap()).for_each(|(x, y)| *x += *y);
                 b.borrow_mut().grad.as_mut().unwrap().iter_mut().zip(self.0.borrow().grad.as_ref().unwrap()).for_each(|(x, y)| *x += *y);
-                Tensor::from(a.clone()).back_prop();
-                Tensor::from(b.clone()).back_prop();
+                Tensor::from(a.clone()).back_prop_helper(false,false);
+                Tensor::from(b.clone()).back_prop_helper(false,false);
             },
             Some(Op::Sub(a, b)) => {
                 a.borrow_mut().grad.as_mut().unwrap().iter_mut().zip(self.0.borrow().grad.as_ref().unwrap()).for_each(|(x, y)| *x += *y);
                 b.borrow_mut().grad.as_mut().unwrap().iter_mut().zip(self.0.borrow().grad.as_ref().unwrap()).for_each(|(x, y)| *x -= *y);
-                Tensor::from(a.clone()).back_prop();
-                Tensor::from(b.clone()).back_prop();
+                Tensor::from(a.clone()).back_prop_helper(false,false);
+                Tensor::from(b.clone()).back_prop_helper(false,false);
             },
             Some(Op::Mul(a, b)) => {
                 let strides = trivial_strides(&self.0.borrow().shape);
@@ -1493,8 +1520,8 @@ impl Tensor{
                     a.borrow_mut().grad.as_mut().unwrap()[raw_index] += bval * self.0.borrow().grad.as_ref().unwrap()[raw_index];
                     b.borrow_mut().grad.as_mut().unwrap()[raw_index] += aval * self.0.borrow().grad.as_ref().unwrap()[raw_index];
                 }
-                Tensor::from(a.clone()).back_prop();
-                Tensor::from(b.clone()).back_prop();
+                Tensor::from(a.clone()).back_prop_helper(false,false);
+                Tensor::from(b.clone()).back_prop_helper(false,false);
             },
             Some(Op::Div(a, b)) => {
                 // z = (x/y) dz/dy = -x/(y^2) * dz/dx
@@ -1509,11 +1536,11 @@ impl Tensor{
                     let bval = b.borrow().fetch(&i);
                     b.borrow_mut().grad.as_mut().unwrap()[raw_index] -= a.borrow().fetch(&i) / (bval * bval) * self.0.borrow().grad.as_ref().unwrap()[raw_index];
                 }
-                Tensor::from(a.clone()).back_prop();
-                Tensor::from(b.clone()).back_prop();
+                Tensor::from(a.clone()).back_prop_helper(false,false);
+                Tensor::from(b.clone()).back_prop_helper(false,false);
             },
             Some(Op::Neg(a)) => {
-                Tensor::from(a.clone()).back_prop();
+                Tensor::from(a.clone()).back_prop_helper(false,false);
             },
             Some(Op::MatMul(a,b)) => {
                 let ashape = a.borrow().shape.clone();
@@ -1564,8 +1591,8 @@ impl Tensor{
                         }
                     }
                 }
-                Tensor::from(a.clone()).back_prop();
-                Tensor::from(b.clone()).back_prop();
+                Tensor::from(a.clone()).back_prop_helper(false,false);
+                Tensor::from(b.clone()).back_prop_helper(false,false);
             },
             Some(Op::Exp(a)) => {
                 for i in MultiDimIterator::new(&a.borrow().shape){
@@ -1575,7 +1602,7 @@ impl Tensor{
                     }
                     a.borrow_mut().grad.as_mut().unwrap()[raw_index] += self.fetch(&i) * self.0.borrow().grad.as_ref().unwrap()[raw_index];
                 }
-                Tensor::from(a.clone()).back_prop();
+                Tensor::from(a.clone()).back_prop_helper(false,false);
             },
             Some(Op::Sum(a, axis)) => {
                 let astrides = trivial_strides(a.borrow().shape.as_ref());
@@ -1594,11 +1621,11 @@ impl Tensor{
                     }
                     a.borrow_mut().grad.as_mut().unwrap()[raw_index] += self.0.borrow().grad.as_ref().unwrap()[raw_index2];
                 }
-                Tensor::from(a.clone()).back_prop();
+                Tensor::from(a.clone()).back_prop_helper(false,false);
             },
             Some(Op::Reshape(a)) => {
                 a.borrow_mut().grad.as_mut().unwrap().iter_mut().zip(self.0.borrow().grad.as_ref().unwrap()).for_each(|(x, y)| *x += *y);
-                Tensor::from(a.clone()).back_prop();
+                Tensor::from(a.clone()).back_prop_helper(false,false);
             },
             Some(Op::Transpose(a , axes)) => {
                 // [1 ,2 , 0] [k , m , n] -> [m , n , k]
@@ -1621,11 +1648,14 @@ impl Tensor{
                     a.borrow_mut().grad.as_mut().unwrap()[raw_index] += self.0.borrow().grad.as_ref().unwrap()[raw_index2];
                 }
 
-                Tensor::from(a.clone()).back_prop();
+                Tensor::from(a.clone()).back_prop_helper(false,false);
 
 
             },
-            Some(Op::Slice(a,indexs)) => {
+            Some(Op::SliceFrom(a,indexs)) => {
+                if is_slice_into{
+                    return;
+                }
                 let index = &indexs.0;
                 let ashape = a.borrow().shape.clone();
                 let astrides = trivial_strides(&ashape);
@@ -1633,11 +1663,11 @@ impl Tensor{
                 for i in MultiDimIterator::new(&selfshape){
                     let mut raw_index = 0;
                     for j in 0..selfshape.len(){
-                        raw_index += (i[selfshape.len() - j - 1] % selfshape[selfshape.len()-j - 1]) * selfstrides[j];
+                        raw_index += (i[j] ) * selfstrides[j];
                     }
                     let mut idx = Vec::new();
                     let mut tot = 0;
-                    for j in 0..ashape.len(){
+                    for j in 0..index.len(){
                         match index[j]{
                             SliceIndexUnit::Filler => (),
                             SliceIndexUnit::Num(x) => idx.push(x),
@@ -1657,8 +1687,47 @@ impl Tensor{
                     }
                     a.borrow_mut().grad.as_mut().unwrap()[raw_index2] += self.0.borrow().grad.as_ref().unwrap()[raw_index];
                 }
-                Tensor::from(a.clone()).back_prop();
+                Tensor::from(a.clone()).back_prop_helper(false,true);
             },
+            Some(Op::SliceInto(ts,is))=>{
+                if is_slice_from{
+                    return ;
+                }
+                for (t,si ) in ts.iter().zip(is.iter()){
+                    let index = si.0.clone();
+                    let ashape = t.borrow().shape.clone();
+                    let astrides = trivial_strides(&ashape);
+                    let selfstrides = trivial_strides(&selfshape);
+                    for i in MultiDimIterator::new(&ashape){
+                        let mut raw_index = 0;
+                        for j in 0..ashape.len(){
+                            raw_index += i[j] * astrides[j];
+                        }
+                        let mut idx = Vec::new();
+                        let mut tot = 0;
+                        for j in 0..index.len(){
+                            match index[j]{
+                                SliceIndexUnit::Filler => (),
+                                SliceIndexUnit::Num(x) => idx.push(x),
+                                SliceIndexUnit::Slice((start , end , step))=>{
+                                    let mut dim = 1 + (end - start) / step;
+                                    if start + step * (dim-1) == end {
+                                        dim -= 1;
+                                    }
+                                    idx.push(start + step * (i[tot] % dim));
+                                    tot += 1;
+                                }
+                            }
+                        }
+                        let mut raw_index2 = 0;
+                        for j in 0..idx.len(){
+                            raw_index2 += idx[j] * selfstrides[j];
+                        }
+                        t.borrow_mut().grad.as_mut().unwrap()[raw_index] += self.0.borrow().grad.as_ref().unwrap()[raw_index2];
+                    }
+                    Tensor::from(t.clone()).back_prop_helper(true,false);
+                }
+            }
             Some(Op::Assign(a)) => {
                 let shape = a.borrow().shape.clone();
                 let strides = trivial_strides(&shape);
@@ -1669,7 +1738,7 @@ impl Tensor{
                     }
                     a.borrow_mut().grad.as_mut().unwrap()[raw_index] += self.0.borrow().grad.as_ref().unwrap()[raw_index];
                 }
-                Tensor::from(a.clone()).back_prop();
+                Tensor::from(a.clone()).back_prop_helper(false,false);
             },
             Some(Op::Dot(a, b)) => {
                 let ashape = a.borrow().shape.clone();
@@ -1712,11 +1781,14 @@ impl Tensor{
                         }
                     }
                 }
-                Tensor::from(a.clone()).back_prop();
-                Tensor::from(b.clone()).back_prop();
+                Tensor::from(a.clone()).back_prop_helper(false,false);
+                Tensor::from(b.clone()).back_prop_helper(false,false);
 
             },
         }
+    }
+    pub fn back_prop(self : & mut Self){
+        self.back_prop_helper(false, false);
     }
     pub fn print_grad(self : & Self){
         let tmp = TensorRaw{
