@@ -94,6 +94,7 @@ impl From<Vec<SliceIndexUnit>> for SliceIndex {
     }
 }
 
+#[macro_export]
 macro_rules! s {
     ( $($tokens:tt),* $(,)? ) => {
         {
@@ -138,6 +139,7 @@ pub enum Op{
     Div(Arc<RefCell<TensorRaw>> , Arc<RefCell<TensorRaw>>),
     MatMul(Arc<RefCell<TensorRaw>> , Arc<RefCell<TensorRaw>>),
     Exp(Arc<RefCell<TensorRaw>>),
+    Pow(Arc<RefCell<TensorRaw>> , f64),
     Neg(Arc<RefCell<TensorRaw>>),
     Sum(Arc<RefCell<TensorRaw>> , usize),
     Reshape(Arc<RefCell<TensorRaw>> ),
@@ -172,6 +174,7 @@ fn inverse_permuate(axes : & Vec<usize>)-> Vec<usize>{
     }
     newaxes
 }
+
 
 impl TensorRaw{
     pub fn dim(self : & Self)-> usize{
@@ -280,7 +283,7 @@ impl TensorRaw{
     pub fn raw(self : & Self) -> f64{
         self.raw.borrow()[0]
     }
-    pub fn transpose(self : & Self , axes : Vec<usize>)-> TensorRaw{
+    pub fn transpose(self : & Self , axes : &Vec<usize>)-> TensorRaw{
         // [1 ,2 , 0] [k , m , n] -> [m , n , k]
         assert_eq!(self.shape.len(),axes.iter().collect::<std::collections::HashSet<_>>().len());
         let newshape = permuate(&self.shape , &axes);
@@ -337,6 +340,20 @@ impl TensorRaw{
             shape : self.shape.clone(),
             strides : self.strides.clone(),
             offset:self.offset,
+            op : None,
+            grad : None
+        }
+    }
+    pub fn pow(self : & Self , power : f64)-> TensorRaw{
+        let mut new_raw = self.raw.borrow().clone();
+        for v in &mut new_raw {
+            *v = v.powf(power);
+        }
+        TensorRaw {
+            raw: Arc::new(RefCell::new(new_raw)),
+            shape: self.shape.clone(),
+            strides: self.strides.clone(),
+            offset: self.offset,
             op : None,
             grad : None
         }
@@ -469,24 +486,7 @@ impl Clone for TensorRaw {
         TensorRaw{
             raw : Arc::new(RefCell::new(newraw)),
             shape : self.shape.clone(),
-            strides : {
-                let shape = self.shape.clone();
-                 match shape.len(){
-                    0 => vec![],
-                    _ => {
-                        let mut strides = vec![1];
-                        let mut prod = 1;
-                        let mut rev_out_shape = shape.clone();
-                        rev_out_shape.reverse();
-                        for i in &rev_out_shape[0..(shape.len()-1)]  {
-                            prod *= i;
-                            strides.push(prod);
-                        }
-                        strides.reverse();
-                        strides
-                    }
-                }
-            },
+            strides : trivial_strides(&self.shape),
             offset : 0,
             op : None,
             grad : None
@@ -743,6 +743,18 @@ impl From<f64> for TensorRaw {
             raw: Arc::new(RefCell::new(vec![val])),
             shape: vec![],
             strides: vec![],
+            offset: 0,
+            op : None,
+            grad : None
+        }
+    }
+}
+impl From<&[f64]> for TensorRaw {
+    fn from(data: &[f64]) -> Self {
+        TensorRaw {
+            raw: Arc::new(RefCell::new(data.to_vec())),
+            shape: vec![data.len()],
+            strides: vec![1],
             offset: 0,
             op : None,
             grad : None
@@ -1011,7 +1023,7 @@ pub struct Tensor(Arc<RefCell<TensorRaw>>);
 impl Clone for Tensor {
     fn clone(&self) -> Self {
         let res = Tensor(Arc::new(RefCell::new(self.0.borrow().clone())));
-        res.0.borrow_mut().op = None;// Clear the operation history
+        res.0.borrow_mut().op = None;
         res.0.borrow_mut().grad = None;
         res
     }
@@ -1198,6 +1210,9 @@ impl Tensor {
         res.0.borrow_mut().op = Some(Op::Exp(self.0.clone()));
         res
     }
+    pub fn sigmoid(self : & Self) -> Tensor{
+        Tensor::from(1.0) / (Tensor::from(1.0) + (-self).exp())
+    }
 }
 impl Tensor {
     pub fn iden(n: usize) -> Tensor {
@@ -1220,9 +1235,9 @@ impl Tensor {
     }
 }
 impl Tensor {
-    pub fn transpose(self : & mut Self , axes : Vec<usize>) -> Tensor{
-        let res = Tensor(Arc::new(RefCell::new((self.0.borrow().transpose(axes.clone())).clone())));
-        res.0.borrow_mut().op = Some(Op::Transpose(self.0.clone() , axes));
+    pub fn transpose(self : & mut Self , axes : &Vec<usize>) -> Tensor{
+        let res = Tensor(Arc::new(RefCell::new((self.0.borrow().transpose(axes)).clone())));
+        res.0.borrow_mut().op = Some(Op::Transpose(self.0.clone() , axes.clone()));
         res
     }
 }
@@ -1314,6 +1329,14 @@ impl From<Arc<RefCell<TensorRaw>>> for Tensor {
 }
 
 impl Tensor{
+    pub fn mean(self : & Self , axis : usize) -> Tensor{
+        self.sum(axis) / Tensor::from(self.0.borrow().shape[axis] as f64)
+    }
+    pub fn pow(self : & Self , exponent : f64) -> Tensor{
+        let res = Tensor(Arc::new(RefCell::new((self.0.borrow().pow(exponent)).clone())));
+        res.0.borrow_mut().op = Some(Op::Pow(self.0.clone(), exponent));
+        res
+    }
     pub fn init_grad(self : & Self){
         self.init_grad_helper(false, false);
     }
@@ -1322,6 +1345,10 @@ impl Tensor{
         let selfshape = self.0.borrow().shape.clone();
         match &self.0.borrow().op{
             None => (),
+            Some(Op::Pow( a, p )) => {
+                a.borrow_mut().grad = Some(vec![0.;selfshape.iter().product()]);
+                Tensor::from(a.clone()).init_grad_helper(false, false);
+            }
             Some(Op :: Assign( a ))=>{
                 a.borrow_mut().grad = Some(vec![0.;selfshape.iter().product()]);
                 Tensor::from(a.clone()).init_grad_helper(false, false);
@@ -1496,6 +1523,10 @@ impl Tensor{
         let selfshape= self.shape().clone();
         match &self.0.borrow().op{
             None => (),
+            Some(Op::Pow(a, p)) => {
+                a.borrow_mut().grad.as_mut().unwrap().iter_mut().zip(self.0.borrow().grad.as_ref().unwrap()).for_each(|(x, y)| *x += *y * p * self.0.borrow().raw().powf(p - 1.0));
+                Tensor::from(a.clone()).back_prop_helper(false,false);
+            },
             Some(Op::Add(a, b)) => {
                 a.borrow_mut().grad.as_mut().unwrap().iter_mut().zip(self.0.borrow().grad.as_ref().unwrap()).for_each(|(x, y)| *x += *y);
                 b.borrow_mut().grad.as_mut().unwrap().iter_mut().zip(self.0.borrow().grad.as_ref().unwrap()).for_each(|(x, y)| *x += *y);
@@ -1540,6 +1571,7 @@ impl Tensor{
                 Tensor::from(b.clone()).back_prop_helper(false,false);
             },
             Some(Op::Neg(a)) => {
+                a.borrow_mut().grad.as_mut().unwrap().iter_mut().zip(self.0.borrow().grad.as_ref().unwrap()).for_each(|(x, y)| *x -= *y);
                 Tensor::from(a.clone()).back_prop_helper(false,false);
             },
             Some(Op::MatMul(a,b)) => {
@@ -1591,11 +1623,13 @@ impl Tensor{
                         }
                     }
                 }
+
                 Tensor::from(a.clone()).back_prop_helper(false,false);
                 Tensor::from(b.clone()).back_prop_helper(false,false);
             },
             Some(Op::Exp(a)) => {
-                for i in MultiDimIterator::new(&a.borrow().shape){
+                let ashape = a.borrow().shape.clone();
+                for i in MultiDimIterator::new(&ashape){
                     let mut raw_index = 0;
                     for j in 0..a.borrow().shape.len(){
                         raw_index += (i[a.borrow().shape.len() - j-1] % a.borrow().shape[a.borrow().shape.len()-j - 1]) * a.borrow().strides[j];
@@ -1811,6 +1845,29 @@ impl Tensor{
     pub fn dim(self : & Self)-> usize{
         self.0.borrow().shape.len()
     }
+    pub fn grad(self : & Self ) -> Tensor{
+        let res = Tensor(Arc::new(RefCell::new(TensorRaw{
+            raw: Arc::new(RefCell::new(self.0.borrow().grad.as_ref().unwrap().clone())),
+            shape: self.0.borrow().shape.clone(),
+            strides: trivial_strides(self.0.borrow().shape.as_ref()),
+            offset: 0,
+            op: None,
+            grad: None,
+        })));
+        res
+    }
 }
 
 
+impl From<f64> for Tensor {
+    fn from(value: f64) -> Self {
+        let res = Tensor(Arc::new(RefCell::new(TensorRaw::from(value))));
+        res
+    }
+}
+impl From<&[f64]> for Tensor {
+    fn from(slice: &[f64]) -> Self {
+        let res = Tensor(Arc::new(RefCell::new(TensorRaw::from(slice))));
+        res
+    }
+}
