@@ -33,7 +33,7 @@ Wraps TensorRaw and provides high-level interfaces with automatic differentiatio
 ### Slicing
 Because of the striction of index operator in Rust, we cannot using *[]* operator.
 You can use the macro *s![]* to get a SliceIndex:
-- ... for spaceholder
+- .. for spaceholder
 - (a , b) for [a , b)
 - (a , b , c) for [a , b) with a stride of c
 - a for just number a
