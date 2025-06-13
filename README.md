@@ -103,9 +103,9 @@ fn main(){
     let y = Tensor::randn(&vec![2, 1]); 
 
 
-    let mut model = Perceptron::new(2); // 初始化感知机，输入特征数为3
+    let mut model = Perceptron::new(2); // 初始化感知机，输入特征数为2
     for epoch in 0..100 {
-        let loss = model.train(&x, &y, 0.1); // 训练模型，学习率为0.01
+        let loss = model.train(&x, &y, 0.1); // 训练模型，学习率为0.1
         println!("Epoch {}: Loss = {}", epoch, loss);
     }
 
