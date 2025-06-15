@@ -36,15 +36,30 @@ impl Perceptron {
     }
 }
 fn main(){
-    let x = Tensor::randn(&vec![2, 2]); 
-    let y = Tensor::randn(&vec![2, 1]); 
+
+
+        let x = Tensor::new(&vec![
+        0.0, 0.0,
+        0.0, 1.0,
+        1.0, 0.0,
+        1.0, 1.0,
+    ]);
+    let rx = x.reshape(&vec![4 , 2]);
+    let y = Tensor::new(&vec![
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    ]);
+    let ry = y.reshape(&vec![4 , 1]);
 
 
     let mut model = Perceptron::new(2); // 初始化感知机，输入特征数为3
-    for epoch in 0..100 {
-        let loss = model.train(&x, &y, 0.1); // 训练模型，学习率为0.01
+    for epoch in 0..200 {
+        let loss = model.train(&rx, &ry, 1.0); // 训练模型，学习率为1.0
         println!("Epoch {}: Loss = {}", epoch, loss);
     }
-
+    println!("Final result:");
+    println!("{}",model.forward(&rx));
     
 }

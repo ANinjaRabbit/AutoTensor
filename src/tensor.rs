@@ -1,5 +1,5 @@
 use core::{ panic};
-use std::{ cell::RefCell,  fmt::Display, ops::{Add,  Div, Mul, Neg, Sub}, sync::Arc, vec};
+use std::{ cell::RefCell, fmt::Display, ops::{Add,  Div, Mul, Neg, Sub}, os::macos::raw, sync::Arc, vec};
 use rand::{self};
 use rand_distr::{Distribution, Normal};
 
@@ -1228,7 +1228,7 @@ impl Tensor {
     }
 }
 impl Tensor {
-    pub fn reshape(self : & mut Self , shape : & Vec<usize>) -> Tensor{
+    pub fn reshape(self : & Self , shape : & Vec<usize>) -> Tensor{
         let res = Tensor(Arc::new(RefCell::new((self.0.borrow().reshape(shape)).clone())));
         res.0.borrow_mut().op = Some(Op::Reshape(self.0.clone()));
         res
@@ -1524,7 +1524,9 @@ impl Tensor{
         match &self.0.borrow().op{
             None => (),
             Some(Op::Pow(a, p)) => {
-                a.borrow_mut().grad.as_mut().unwrap().iter_mut().zip(self.0.borrow().grad.as_ref().unwrap()).for_each(|(x, y)| *x += *y * p * self.0.borrow().raw().powf(p - 1.0));
+                let mut apick = Vec::new();
+                TensorRaw::pick(&a.borrow().raw.borrow() , &a.borrow().shape, &a.borrow().strides, & mut apick);
+                a.borrow_mut().grad.as_mut().unwrap().iter_mut().zip(self.0.borrow().grad.as_ref().unwrap()).zip(apick.iter()).for_each(|((x ,y) , z) | *x += *y * p * z.powf(p - 1.0));
                 Tensor::from(a.clone()).back_prop_helper(false,false);
             },
             Some(Op::Add(a, b)) => {
