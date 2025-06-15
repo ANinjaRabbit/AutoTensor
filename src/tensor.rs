@@ -1822,6 +1822,7 @@ impl Tensor{
 
             },
         }
+        self.clean_op();
     }
     pub fn back_prop(self : & mut Self){
         self.back_prop_helper(false, false);
@@ -1857,6 +1858,9 @@ impl Tensor{
             grad: None,
         })));
         res
+    }
+    pub fn clean_op(self : & mut Self){
+        self.0.borrow_mut().op = None;
     }
 }
 

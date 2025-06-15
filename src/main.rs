@@ -55,7 +55,7 @@ fn main(){
 
 
     let mut model = Perceptron::new(2); // 初始化感知机，输入特征数为3
-    for epoch in 0..200 {
+    for epoch in 0..10000 {
         let loss = model.train(&rx, &ry, 1.0); // 训练模型，学习率为1.0
         println!("Epoch {}: Loss = {}", epoch, loss);
     }
