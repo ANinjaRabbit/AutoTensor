@@ -1,8 +1,4 @@
-pub mod tensor;
-
-use tensor::*;
-use crate::tensor::Tensor;
-
+use AutoTensor::Tensor;
 /// 单层感知机结构体
 pub struct Perceptron {
     pub weight: Tensor,
